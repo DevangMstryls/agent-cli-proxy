@@ -1374,9 +1374,11 @@ git commit -m "Add OpenAI-shaped SSE chunk and completion translators"
 
 **Interfaces:**
 - Consumes: `hashMessages` (Task 4), `SessionStore` (Task 5), `ChatMessage`/`ProviderEvent` (Task 4)
-- Produces: `ConversationResolution` — `{ prompt: string; resumeSessionId?: string; newSessionId?: string; rememberKey: string }`
+- Produces: `ConversationResolution` — `{ prompt: string; resumeSessionId?: string; newSessionId?: string }`
 - Produces: `resolveConversation(messages: ChatMessage[], sessionStore: SessionStore): ConversationResolution`
 - Produces: `tapProviderEvents(events: AsyncIterable<ProviderEvent>, onEvent: (event: ProviderEvent) => void): AsyncGenerator<ProviderEvent>`
+
+**Design note — why there is no `rememberKey` here:** the design spec's remember-key is `hash(messages + [assistant reply])` — the request's messages *plus the reply Claude is about to generate*. That reply doesn't exist yet when `resolveConversation` runs (before the provider call), so this function cannot produce that hash. Task 10 computes it itself, after the full reply text is known, using `hashMessages` directly on `[...requestMessages, replyMessage]`. `resolveConversation`'s only job is the resume-vs-new decision and prompt construction.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1398,24 +1400,32 @@ describe('resolveConversation', () => {
     expect(resolution.prompt).toBe('hello');
     expect(resolution.newSessionId).toBeDefined();
     expect(resolution.resumeSessionId).toBeUndefined();
-    expect(resolution.rememberKey).toBe(hashMessages(messages));
   });
 
-  it('resumes an existing session when the prefix hash is known', () => {
+  it('resumes an existing session on a real round trip (remember key includes the reply, as Task 10 will compute it)', () => {
     const store = new SessionStore(1000, 10);
 
-    const messages: ChatMessage[] = [
+    const turn1Messages: ChatMessage[] = [{ role: 'user', content: 'hello' }];
+    const turn1 = resolveConversation(turn1Messages, store);
+    expect(turn1.newSessionId).toBeDefined();
+
+    // Mirrors what Task 10 does after a turn completes: hash the request
+    // messages plus the assistant's reply, then remember it under the
+    // Claude session ID the provider returned.
+    const turn1RememberKey = hashMessages([...turn1Messages, { role: 'assistant', content: 'hi there' }]);
+    store.remember(turn1RememberKey, 'claude-session-1');
+
+    // Turn 2: the client resends full history, including the reply it just received.
+    const turn2Messages: ChatMessage[] = [
       { role: 'user', content: 'hello' },
       { role: 'assistant', content: 'hi there' },
       { role: 'user', content: 'how are you?' },
     ];
-    // Prefix (first two messages) must match a remembered full-turn hash.
-    store.remember(hashMessages(messages.slice(0, 2)), 'claude-session-1');
+    const turn2 = resolveConversation(turn2Messages, store);
 
-    const resolution = resolveConversation(messages, store);
-    expect(resolution.prompt).toBe('how are you?');
-    expect(resolution.resumeSessionId).toBe('claude-session-1');
-    expect(resolution.newSessionId).toBeUndefined();
+    expect(turn2.prompt).toBe('how are you?');
+    expect(turn2.resumeSessionId).toBe('claude-session-1');
+    expect(turn2.newSessionId).toBeUndefined();
   });
 
   it('starts a new session with the full transcript when the prefix is unknown', () => {
@@ -1474,7 +1484,6 @@ export interface ConversationResolution {
   prompt: string;
   resumeSessionId?: string;
   newSessionId?: string;
-  rememberKey: string;
 }
 
 export function resolveConversation(messages: ChatMessage[], sessionStore: SessionStore): ConversationResolution {
@@ -1483,21 +1492,20 @@ export function resolveConversation(messages: ChatMessage[], sessionStore: Sessi
   }
 
   const lastMessage = messages[messages.length - 1];
-  const rememberKey = hashMessages(messages);
 
   if (messages.length === 1) {
-    return { prompt: lastMessage.content, newSessionId: randomUUID(), rememberKey };
+    return { prompt: lastMessage.content, newSessionId: randomUUID() };
   }
 
   const prefix = messages.slice(0, -1);
   const existing = sessionStore.lookup(hashMessages(prefix));
 
   if (existing) {
-    return { prompt: lastMessage.content, resumeSessionId: existing.claudeSessionId, rememberKey };
+    return { prompt: lastMessage.content, resumeSessionId: existing.claudeSessionId };
   }
 
   const fullPrompt = messages.map((m) => `[${m.role}] ${m.content}`).join('\n\n');
-  return { prompt: fullPrompt, newSessionId: randomUUID(), rememberKey };
+  return { prompt: fullPrompt, newSessionId: randomUUID() };
 }
 
 export async function* tapProviderEvents(
@@ -1719,6 +1727,7 @@ import type { Request, Response } from 'express';
 import type { AppConfig } from '../config.js';
 import { ApiError } from '../errors.js';
 import { toOpenAiError } from '../middleware/errorHandler.js';
+import { hashMessages } from '../session/hash.js';
 import { resolveConversation, tapProviderEvents } from '../session/resolveConversation.js';
 import type { SessionStore } from '../session/SessionStore.js';
 import { formatSseChunk, SSE_DONE, toOpenAiChunks, toOpenAiCompletion } from '../translate/openaiSse.js';
@@ -1745,6 +1754,7 @@ export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
       const resolution = resolveConversation(body.messages, deps.sessionStore);
 
       let capturedSessionId: string | undefined;
+      let fullReplyText = '';
       const rawEvents = deps.provider.startTurn({
         prompt: resolution.prompt,
         model,
@@ -1754,7 +1764,9 @@ export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
         permissionMode: deps.config.permissionMode,
       });
       const events = tapProviderEvents(rawEvents, (event) => {
-        if (event.type === 'result' && event.sessionId) {
+        if (event.type === 'delta') {
+          fullReplyText += event.text;
+        } else if (event.type === 'result' && event.sessionId) {
           capturedSessionId = event.sessionId;
         }
       });
@@ -1775,7 +1787,13 @@ export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
         }
       } finally {
         if (capturedSessionId) {
-          deps.sessionStore.remember(resolution.rememberKey, capturedSessionId);
+          // The remember key must match what the NEXT request's prefix hash
+          // will be: the client resends this turn's messages plus the
+          // assistant reply it just received, so that's what gets hashed
+          // here — resolveConversation could not compute this key itself,
+          // since the reply doesn't exist until the provider call completes.
+          const rememberKey = hashMessages([...body.messages, { role: 'assistant', content: fullReplyText }]);
+          deps.sessionStore.remember(rememberKey, capturedSessionId);
         }
       }
     } catch (err) {
