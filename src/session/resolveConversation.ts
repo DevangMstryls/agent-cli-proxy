@@ -7,7 +7,6 @@ export interface ConversationResolution {
   prompt: string;
   resumeSessionId?: string;
   newSessionId?: string;
-  rememberKey: string;
 }
 
 export function resolveConversation(messages: ChatMessage[], sessionStore: SessionStore): ConversationResolution {
@@ -16,21 +15,20 @@ export function resolveConversation(messages: ChatMessage[], sessionStore: Sessi
   }
 
   const lastMessage = messages[messages.length - 1];
-  const rememberKey = hashMessages(messages);
 
   if (messages.length === 1) {
-    return { prompt: lastMessage.content, newSessionId: randomUUID(), rememberKey };
+    return { prompt: lastMessage.content, newSessionId: randomUUID() };
   }
 
   const prefix = messages.slice(0, -1);
   const existing = sessionStore.lookup(hashMessages(prefix));
 
   if (existing) {
-    return { prompt: lastMessage.content, resumeSessionId: existing.claudeSessionId, rememberKey };
+    return { prompt: lastMessage.content, resumeSessionId: existing.claudeSessionId };
   }
 
   const fullPrompt = messages.map((m) => `[${m.role}] ${m.content}`).join('\n\n');
-  return { prompt: fullPrompt, newSessionId: randomUUID(), rememberKey };
+  return { prompt: fullPrompt, newSessionId: randomUUID() };
 }
 
 export async function* tapProviderEvents(

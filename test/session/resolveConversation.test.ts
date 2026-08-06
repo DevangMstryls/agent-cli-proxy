@@ -13,24 +13,32 @@ describe('resolveConversation', () => {
     expect(resolution.prompt).toBe('hello');
     expect(resolution.newSessionId).toBeDefined();
     expect(resolution.resumeSessionId).toBeUndefined();
-    expect(resolution.rememberKey).toBe(hashMessages(messages));
   });
 
-  it('resumes an existing session when the prefix hash is known', () => {
+  it('resumes an existing session on a real round trip (remember key includes the reply, as Task 10 will compute it)', () => {
     const store = new SessionStore(1000, 10);
 
-    const messages: ChatMessage[] = [
+    const turn1Messages: ChatMessage[] = [{ role: 'user', content: 'hello' }];
+    const turn1 = resolveConversation(turn1Messages, store);
+    expect(turn1.newSessionId).toBeDefined();
+
+    // Mirrors what Task 10 does after a turn completes: hash the request
+    // messages plus the assistant's reply, then remember it under the
+    // Claude session ID the provider returned.
+    const turn1RememberKey = hashMessages([...turn1Messages, { role: 'assistant', content: 'hi there' }]);
+    store.remember(turn1RememberKey, 'claude-session-1');
+
+    // Turn 2: the client resends full history, including the reply it just received.
+    const turn2Messages: ChatMessage[] = [
       { role: 'user', content: 'hello' },
       { role: 'assistant', content: 'hi there' },
       { role: 'user', content: 'how are you?' },
     ];
-    // Prefix (first two messages) must match a remembered full-turn hash.
-    store.remember(hashMessages(messages.slice(0, 2)), 'claude-session-1');
+    const turn2 = resolveConversation(turn2Messages, store);
 
-    const resolution = resolveConversation(messages, store);
-    expect(resolution.prompt).toBe('how are you?');
-    expect(resolution.resumeSessionId).toBe('claude-session-1');
-    expect(resolution.newSessionId).toBeUndefined();
+    expect(turn2.prompt).toBe('how are you?');
+    expect(turn2.resumeSessionId).toBe('claude-session-1');
+    expect(turn2.newSessionId).toBeUndefined();
   });
 
   it('starts a new session with the full transcript when the prefix is unknown', () => {
