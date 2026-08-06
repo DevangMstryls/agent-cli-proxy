@@ -31,19 +31,23 @@ export class SessionStore {
       const oldestKey = this.entries.keys().next().value;
       if (oldestKey !== undefined) this.entries.delete(oldestKey);
     }
+    this.entries.delete(fullHash);
     this.entries.set(fullHash, { claudeSessionId, expiresAt: this.now() + this.ttlMs });
   }
 
   async withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const prior = this.locks.get(key) ?? Promise.resolve();
     const run = prior.then(fn, fn);
-    this.locks.set(
-      key,
-      run.then(
-        () => undefined,
-        () => undefined,
-      ),
+    const settled = run.then(
+      () => undefined,
+      () => undefined,
     );
+    this.locks.set(key, settled);
+    settled.then(() => {
+      if (this.locks.get(key) === settled) {
+        this.locks.delete(key);
+      }
+    });
     return run;
   }
 }

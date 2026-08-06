@@ -47,4 +47,30 @@ describe('SessionStore', () => {
     await Promise.all([slow, fast]);
     expect(order).toEqual(['slow', 'fast']);
   });
+
+  it('cleans up lock entries after they settle', async () => {
+    const store = new SessionStore(1000, 10);
+    let firstCompleted = false;
+
+    // First call to key 'cleanup-test'
+    await store.withLock('cleanup-test', async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      firstCompleted = true;
+    });
+
+    // Ensure first lock is fully settled
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    // Second call to same key should not wait on the old lock
+    const start = Date.now();
+    await store.withLock('cleanup-test', async () => {
+      // This should execute immediately without waiting for the old lock
+    });
+    const duration = Date.now() - start;
+
+    // If locks were not cleaned up, the second call would have to wait at least 15ms
+    // With cleanup, it should be nearly instant
+    expect(duration).toBeLessThan(10);
+    expect(firstCompleted).toBe(true);
+  });
 });
