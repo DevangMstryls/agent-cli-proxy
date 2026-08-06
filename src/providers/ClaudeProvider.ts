@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import type { Readable } from 'node:stream';
+import type { Readable, Writable } from 'node:stream';
 import { parseClaudeStream } from './parseStreamJson.js';
 import type { AgentProvider, ProviderEvent, StartTurnOptions } from '../types.js';
 
@@ -14,6 +14,7 @@ export class ClaudeCliError extends Error {
 }
 
 export interface SpawnedProcess {
+  stdin: Writable;
   stdout: Readable;
   stderr: Readable;
   on(event: 'close', listener: (code: number | null) => void): void;
@@ -32,7 +33,7 @@ export class ClaudeProvider implements AgentProvider {
 
   buildArgs(options: StartTurnOptions): string[] {
     const args = [
-      '-p', options.prompt,
+      '-p',
       '--output-format', 'stream-json',
       '--include-partial-messages',
       '--safe-mode',
@@ -50,6 +51,9 @@ export class ClaudeProvider implements AgentProvider {
 
   async *startTurn(options: StartTurnOptions): AsyncGenerator<ProviderEvent> {
     const child = this.spawnFn(this.claudeBin, this.buildArgs(options), { cwd: options.cwd });
+
+    child.stdin.write(options.prompt);
+    child.stdin.end();
 
     let stderrOutput = '';
     child.stderr.on('data', (chunk: Buffer) => {

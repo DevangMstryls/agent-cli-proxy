@@ -6,15 +6,23 @@ import type { StartTurnOptions } from '../../src/types.js';
 
 function createFakeProcess(): {
   proc: SpawnedProcess;
+  stdin: PassThrough;
   stdout: PassThrough;
   stderr: PassThrough;
+  stdinChunks: string[];
   emitClose: (code: number | null) => void;
   emitError: (err: Error) => void;
 } {
+  const stdin = new PassThrough();
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   const emitter = new EventEmitter();
+  const stdinChunks: string[] = [];
+  stdin.on('data', (chunk: Buffer) => {
+    stdinChunks.push(chunk.toString());
+  });
   const proc: SpawnedProcess = {
+    stdin,
     stdout,
     stderr,
     on: (event, listener) => {
@@ -23,8 +31,10 @@ function createFakeProcess(): {
   };
   return {
     proc,
+    stdin,
     stdout,
     stderr,
+    stdinChunks,
     emitClose: (code) => emitter.emit('close', code),
     emitError: (err) => emitter.emit('error', err),
   };
@@ -42,7 +52,7 @@ describe('ClaudeProvider.buildArgs', () => {
     const provider = new ClaudeProvider('claude');
     const args = provider.buildArgs({ ...baseOptions, newSessionId: 'new-id' });
     expect(args).toEqual([
-      '-p', 'hello',
+      '-p',
       '--output-format', 'stream-json',
       '--include-partial-messages',
       '--safe-mode',
@@ -59,6 +69,7 @@ describe('ClaudeProvider.buildArgs', () => {
     expect(args).toContain('--resume');
     expect(args).toContain('existing-id');
     expect(args).not.toContain('--session-id');
+    expect(args).not.toContain('hello');
   });
 });
 
@@ -81,6 +92,7 @@ describe('ClaudeProvider.startTurn', () => {
 
     await consuming;
     expect(collected).toEqual([{ type: 'delta', text: 'hi' }]);
+    expect(fake.stdinChunks.join('')).toBe('hello');
   });
 
   it('throws ClaudeCliError when the process exits non-zero', async () => {
