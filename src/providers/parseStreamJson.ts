@@ -14,6 +14,10 @@ export async function* parseClaudeStream(stdout: NodeJS.ReadableStream): AsyncGe
       continue;
     }
 
+    if (parsed === null || typeof parsed !== 'object') {
+      continue;
+    }
+
     if (
       parsed.type === 'stream_event' &&
       parsed.event?.type === 'content_block_delta' &&

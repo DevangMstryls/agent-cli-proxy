@@ -60,7 +60,7 @@ describe('parseClaudeStream', () => {
   });
 
   it('skips malformed and irrelevant lines without crashing', async () => {
-    const stream = Readable.from(['not json\n', `${JSON.stringify({ type: 'system', subtype: 'hook_started' })}\n`]);
+    const stream = Readable.from(['not json\n', `${JSON.stringify({ type: 'system', subtype: 'hook_started' })}\n`, 'null\n', '123\n', '"string"\n']);
 
     const events = [];
     for await (const event of parseClaudeStream(stream)) {
