@@ -9,6 +9,6 @@ const provider = new ClaudeProvider(config.claudeBin);
 const sessionStore = new SessionStore(config.sessionTtlMs, config.maxSessions);
 const app = createApp({ config, provider, sessionStore });
 
-app.listen(config.port, () => {
+app.listen(config.port, '127.0.0.1', () => {
   console.log(`agent-cli-proxy listening on port ${config.port}`);
 });
