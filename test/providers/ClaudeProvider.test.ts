@@ -4,7 +4,13 @@ import { describe, expect, it } from 'vitest';
 import { ClaudeCliError, ClaudeProvider, type SpawnedProcess } from '../../src/providers/ClaudeProvider.js';
 import type { StartTurnOptions } from '../../src/types.js';
 
-function createFakeProcess(): { proc: SpawnedProcess; stdout: PassThrough; stderr: PassThrough; emitClose: (code: number | null) => void } {
+function createFakeProcess(): {
+  proc: SpawnedProcess;
+  stdout: PassThrough;
+  stderr: PassThrough;
+  emitClose: (code: number | null) => void;
+  emitError: (err: Error) => void;
+} {
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   const emitter = new EventEmitter();
@@ -15,7 +21,13 @@ function createFakeProcess(): { proc: SpawnedProcess; stdout: PassThrough; stder
       emitter.on(event, listener);
     },
   };
-  return { proc, stdout, stderr, emitClose: (code) => emitter.emit('close', code) };
+  return {
+    proc,
+    stdout,
+    stderr,
+    emitClose: (code) => emitter.emit('close', code),
+    emitError: (err) => emitter.emit('error', err),
+  };
 }
 
 const baseOptions: StartTurnOptions = {
@@ -88,5 +100,45 @@ describe('ClaudeProvider.startTurn', () => {
     fake.emitClose(1);
 
     await expect(run).rejects.toThrow(ClaudeCliError);
+  });
+
+  it('throws ClaudeCliError on non-zero exit even when the consumer stops iterating early', async () => {
+    const fake = createFakeProcess();
+    const provider = new ClaudeProvider('claude', () => fake.proc);
+
+    const run = (async () => {
+      const collected: unknown[] = [];
+      for await (const event of provider.startTurn({ ...baseOptions, newSessionId: 'new-id' })) {
+        collected.push(event);
+        break; // simulate the consumer stopping early, triggering generator.return()
+      }
+      return collected;
+    })();
+
+    fake.stdout.write(`${JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } } })}\n`);
+    fake.stderr.write('claude: crashed\n');
+    fake.stdout.end();
+    fake.emitClose(1);
+
+    await expect(run).rejects.toThrow(ClaudeCliError);
+  });
+
+  it('throws ClaudeCliError when the process emits an error instead of closing', async () => {
+    const fake = createFakeProcess();
+    const provider = new ClaudeProvider('claude', () => fake.proc);
+
+    const run = (async () => {
+      const collected: unknown[] = [];
+      for await (const event of provider.startTurn({ ...baseOptions, newSessionId: 'new-id' })) {
+        collected.push(event);
+      }
+      return collected;
+    })();
+
+    fake.emitError(new Error('spawn claude ENOENT'));
+    fake.stdout.end();
+
+    await expect(run).rejects.toThrow(ClaudeCliError);
+    await expect(run).rejects.toThrow('spawn claude ENOENT');
   });
 });

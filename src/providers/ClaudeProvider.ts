@@ -17,6 +17,7 @@ export interface SpawnedProcess {
   stdout: Readable;
   stderr: Readable;
   on(event: 'close', listener: (code: number | null) => void): void;
+  on(event: 'error', listener: (err: Error) => void): void;
 }
 
 export type SpawnFn = (command: string, args: string[], options: { cwd: string }) => SpawnedProcess;
@@ -55,15 +56,36 @@ export class ClaudeProvider implements AgentProvider {
       stderrOutput += chunk.toString();
     });
 
-    const exitPromise = new Promise<number | null>((resolve) => {
-      child.on('close', (code) => resolve(code));
+    let spawnError: Error | undefined;
+    let exitCode: number | null = null;
+    let settled = false;
+    const donePromise = new Promise<void>((resolve) => {
+      child.on('error', (err) => {
+        spawnError = err;
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      });
+      child.on('close', (code) => {
+        exitCode = code;
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      });
     });
 
-    yield* parseClaudeStream(child.stdout);
-
-    const exitCode = await exitPromise;
-    if (exitCode !== 0) {
-      throw new ClaudeCliError(stderrOutput.trim() || `claude exited with code ${exitCode}`, exitCode);
+    try {
+      yield* parseClaudeStream(child.stdout);
+    } finally {
+      await donePromise;
+      if (spawnError) {
+        throw new ClaudeCliError(spawnError.message, null);
+      }
+      if (exitCode !== 0) {
+        throw new ClaudeCliError(stderrOutput.trim() || `claude exited with code ${exitCode}`, exitCode);
+      }
     }
   }
 }
