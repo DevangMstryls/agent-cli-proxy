@@ -1,5 +1,6 @@
-import express, { type Express } from 'express';
+import express, { type Express, Router } from 'express';
 import type { AppConfig } from './config.js';
+import { createAuthMiddleware } from './middleware/auth.js';
 
 export interface AppDeps {
   config: AppConfig;
@@ -12,6 +13,10 @@ export function createApp(deps: AppDeps): Express {
   app.get('/healthz', (_req, res) => {
     res.json({ status: 'ok' });
   });
+
+  const v1 = Router();
+  v1.use(createAuthMiddleware(deps.config));
+  app.use('/v1', v1);
 
   return app;
 }

@@ -22,3 +22,11 @@ describe('GET /healthz', () => {
     expect(response.body).toEqual({ status: 'ok' });
   });
 });
+
+describe('GET /v1/*', () => {
+  it('requires auth even for unknown v1 routes', async () => {
+    const app = createApp({ config: testConfig });
+    const response = await request(app).get('/v1/does-not-exist');
+    expect(response.status).toBe(401);
+  });
+});
