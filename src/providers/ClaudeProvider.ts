@@ -35,6 +35,7 @@ export class ClaudeProvider implements AgentProvider {
     const args = [
       '-p',
       '--output-format', 'stream-json',
+      '--verbose',
       '--include-partial-messages',
       '--safe-mode',
       '--permission-mode', options.permissionMode,

@@ -54,6 +54,7 @@ describe('ClaudeProvider.buildArgs', () => {
     expect(args).toEqual([
       '-p',
       '--output-format', 'stream-json',
+      '--verbose',
       '--include-partial-messages',
       '--safe-mode',
       '--permission-mode', 'acceptEdits',
@@ -68,6 +69,7 @@ describe('ClaudeProvider.buildArgs', () => {
     const args = provider.buildArgs({ ...baseOptions, resumeSessionId: 'existing-id' });
     expect(args).toContain('--resume');
     expect(args).toContain('existing-id');
+    expect(args).toContain('--verbose');
     expect(args).not.toContain('--session-id');
     expect(args).not.toContain('hello');
   });
