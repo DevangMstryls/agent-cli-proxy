@@ -1,6 +1,7 @@
 import express, { type Express, Router } from 'express';
 import type { AppConfig } from './config.js';
 import { createAuthMiddleware } from './middleware/auth.js';
+import { handleListModels } from './routes/models.js';
 
 export interface AppDeps {
   config: AppConfig;
@@ -16,6 +17,7 @@ export function createApp(deps: AppDeps): Express {
 
   const v1 = Router();
   v1.use(createAuthMiddleware(deps.config));
+  v1.get('/models', handleListModels);
   app.use('/v1', v1);
 
   return app;
