@@ -24,53 +24,64 @@ export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
         throw new ApiError('messages must be a non-empty array', 400, 'invalid_request_error');
       }
 
+      if (body.messages.some((m) => typeof m.content !== 'string')) {
+        throw new ApiError('messages[].content must be a string', 400, 'invalid_request_error');
+      }
+
       const model = MODEL_ALIASES.includes(body.model) ? body.model : deps.config.defaultModel;
       const cwd = body.cwd ?? deps.config.workdir;
       const resolution = resolveConversation(body.messages, deps.sessionStore);
 
-      let capturedSessionId: string | undefined;
-      let fullReplyText = '';
-      const rawEvents = deps.provider.startTurn({
-        prompt: resolution.prompt,
-        model,
-        resumeSessionId: resolution.resumeSessionId,
-        newSessionId: resolution.newSessionId,
-        cwd,
-        permissionMode: deps.config.permissionMode,
-      });
-      const events = tapProviderEvents(rawEvents, (event) => {
-        if (event.type === 'delta') {
-          fullReplyText += event.text;
-        } else if (event.type === 'result' && event.sessionId) {
-          capturedSessionId = event.sessionId;
-        }
-      });
-
-      try {
-        if (body.stream) {
-          res.setHeader('Content-Type', 'text/event-stream');
-          res.setHeader('Cache-Control', 'no-cache');
-          res.setHeader('Connection', 'keep-alive');
-          for await (const chunk of toOpenAiChunks(events, model)) {
-            res.write(formatSseChunk(chunk));
+      // Requests that resolve to the same underlying Claude session (either
+      // resuming an existing one or minting a new one) must be serialized —
+      // two concurrent `claude --resume <id>` processes writing the same
+      // session file at once is a real corruption risk.
+      const lockKey = resolution.resumeSessionId ?? resolution.newSessionId!;
+      await deps.sessionStore.withLock(lockKey, async () => {
+        let capturedSessionId: string | undefined;
+        let fullReplyText = '';
+        const rawEvents = deps.provider.startTurn({
+          prompt: resolution.prompt,
+          model,
+          resumeSessionId: resolution.resumeSessionId,
+          newSessionId: resolution.newSessionId,
+          cwd,
+          permissionMode: deps.config.permissionMode,
+        });
+        const events = tapProviderEvents(rawEvents, (event) => {
+          if (event.type === 'delta') {
+            fullReplyText += event.text;
+          } else if (event.type === 'result' && event.sessionId) {
+            capturedSessionId = event.sessionId;
           }
-          res.write(SSE_DONE);
-          res.end();
-        } else {
-          const completion = await toOpenAiCompletion(events, model);
-          res.json(completion);
+        });
+
+        try {
+          if (body.stream) {
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            for await (const chunk of toOpenAiChunks(events, model)) {
+              res.write(formatSseChunk(chunk));
+            }
+            res.write(SSE_DONE);
+            res.end();
+          } else {
+            const completion = await toOpenAiCompletion(events, model);
+            res.json(completion);
+          }
+        } finally {
+          if (capturedSessionId) {
+            // The remember key must match what the NEXT request's prefix hash
+            // will be: the client resends this turn's messages plus the
+            // assistant reply it just received, so that's what gets hashed
+            // here — resolveConversation could not compute this key itself,
+            // since the reply doesn't exist until the provider call completes.
+            const rememberKey = hashMessages([...body.messages, { role: 'assistant', content: fullReplyText }]);
+            deps.sessionStore.remember(rememberKey, capturedSessionId);
+          }
         }
-      } finally {
-        if (capturedSessionId) {
-          // The remember key must match what the NEXT request's prefix hash
-          // will be: the client resends this turn's messages plus the
-          // assistant reply it just received, so that's what gets hashed
-          // here — resolveConversation could not compute this key itself,
-          // since the reply doesn't exist until the provider call completes.
-          const rememberKey = hashMessages([...body.messages, { role: 'assistant', content: fullReplyText }]);
-          deps.sessionStore.remember(rememberKey, capturedSessionId);
-        }
-      }
+      });
     } catch (err) {
       // Express 4 does not auto-catch async handler rejections, so every
       // error path (validation, provider failure, mid-stream failure) is

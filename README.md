@@ -28,6 +28,25 @@ npm start
 npm run dev
 ```
 
+## Security model
+
+- **A valid `API_KEY` is full agent access, not just chat access.** The
+  proxy runs Claude with `--permission-mode acceptEdits`, so any request
+  authenticated with the bearer token can execute real Bash commands and
+  edit files — it is not a scoped, read-only chat API. Treat `API_KEY`
+  with the same care as shell access to the host.
+- **The optional per-request `cwd` field overrides `WORKDIR`.** `WORKDIR`
+  is only a default; a caller can set `cwd` in the request body to point
+  the agent at *any* directory the process can reach, bypassing the
+  configured root entirely.
+- **Localhost binding stops remote attackers, not local ones.** The
+  server binds to `127.0.0.1` only, so it isn't reachable from the
+  network — but any other process or user on the same machine can still
+  reach it and, if they have `API_KEY`, drive the agent.
+- **Generate a real random `API_KEY`.** Don't leave `.env`'s value as the
+  `.env.example` placeholder — anyone who can guess or read a
+  placeholder key gets the access described above.
+
 ## Verifying it works
 
 With the server running in one terminal:
