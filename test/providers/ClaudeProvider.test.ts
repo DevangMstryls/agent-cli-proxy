@@ -153,4 +153,28 @@ describe('ClaudeProvider.startTurn', () => {
     await expect(run).rejects.toThrow(ClaudeCliError);
     await expect(run).rejects.toThrow('spawn claude ENOENT');
   });
+
+  it('does not crash the process when stdin emits an error', async () => {
+    const fake = createFakeProcess();
+    const provider = new ClaudeProvider('claude', () => fake.proc);
+
+    const run = (async () => {
+      const collected: unknown[] = [];
+      for await (const event of provider.startTurn({ ...baseOptions, newSessionId: 'new-id' })) {
+        collected.push(event);
+      }
+      return collected;
+    })();
+
+    // Simulate a torn-down pipe (e.g. EPIPE following a spawn failure). If
+    // ClaudeProvider didn't register its own 'error' listener on stdin, this
+    // emit would throw synchronously (Node's default behavior for an
+    // unhandled stream 'error' event) and crash the whole process.
+    expect(() => fake.stdin.emit('error', new Error('EPIPE'))).not.toThrow();
+
+    fake.stdout.end();
+    fake.emitClose(0);
+
+    await expect(run).resolves.toEqual([]);
+  });
 });

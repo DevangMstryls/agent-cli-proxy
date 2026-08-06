@@ -52,6 +52,12 @@ export class ClaudeProvider implements AgentProvider {
   async *startTurn(options: StartTurnOptions): AsyncGenerator<ProviderEvent> {
     const child = this.spawnFn(this.claudeBin, this.buildArgs(options), { cwd: options.cwd });
 
+    child.stdin.on('error', () => {
+      // A spawn failure (e.g. ENOENT) can tear down stdin before we finish
+      // writing to it; the resulting EPIPE is redundant with the ChildProcess
+      // 'error' event already handled below, so just prevent it from being
+      // unhandled and crashing the process.
+    });
     child.stdin.write(options.prompt);
     child.stdin.end();
 
