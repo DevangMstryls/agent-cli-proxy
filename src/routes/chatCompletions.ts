@@ -6,13 +6,26 @@ import { hashMessages } from '../session/hash.js';
 import { resolveConversation, tapProviderEvents } from '../session/resolveConversation.js';
 import type { SessionStore } from '../session/SessionStore.js';
 import { formatSseChunk, SSE_DONE, toOpenAiChunks, toOpenAiCompletion } from '../translate/openaiSse.js';
-import type { AgentProvider, ChatCompletionRequest } from '../types.js';
+import type { AgentProvider, ChatCompletionRequest, ChatMessage } from '../types.js';
 import { MODEL_ALIASES } from './models.js';
 
 export interface ChatCompletionsDeps {
   provider: AgentProvider;
   sessionStore: SessionStore;
   config: AppConfig;
+}
+
+// Some OpenAI-compatible coding-agent clients (e.g. opencode/OpenChamber) don't
+// send a structured `cwd` field — they embed it as plain text in the system
+// prompt instead, inside an "<env>...Working directory: <path>...</env>"
+// block. Pull it out as a fallback before defaulting to the configured
+// WORKDIR, so each session's own directory is respected when the client
+// provides one this way.
+export function extractWorkdirFromSystemMessage(messages: ChatMessage[]): string | undefined {
+  const systemMessage = messages.find((m) => m.role === 'system');
+  if (!systemMessage) return undefined;
+  const match = systemMessage.content.match(/Working directory:\s*(.+)/);
+  return match ? match[1].trim() : undefined;
 }
 
 export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
@@ -29,7 +42,7 @@ export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
       }
 
       const model = MODEL_ALIASES.includes(body.model) ? body.model : deps.config.defaultModel;
-      const cwd = body.cwd ?? deps.config.workdir;
+      const cwd = body.cwd ?? extractWorkdirFromSystemMessage(body.messages) ?? deps.config.workdir;
       const resolution = resolveConversation(body.messages, deps.sessionStore);
 
       // Requests that resolve to the same underlying Claude session (either

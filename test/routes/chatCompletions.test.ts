@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../../src/app.js';
+import { extractWorkdirFromSystemMessage } from '../../src/routes/chatCompletions.js';
 import { SessionStore } from '../../src/session/SessionStore.js';
 import type { AppConfig } from '../../src/config.js';
-import type { AgentProvider, ProviderEvent, StartTurnOptions } from '../../src/types.js';
+import type { AgentProvider, ChatMessage, ProviderEvent, StartTurnOptions } from '../../src/types.js';
 
 const testConfig: AppConfig = {
   port: 0,
@@ -169,5 +170,76 @@ describe('POST /v1/chat/completions', () => {
     expect(provider.calls[0].newSessionId).toBeDefined();
     expect(provider.calls[1].resumeSessionId).toBe('stub-session-1');
     expect(provider.calls[1].prompt).toBe('follow up');
+  });
+
+  it('uses the working directory embedded in a system message when body.cwd is absent', async () => {
+    const { app, provider } = buildApp();
+
+    await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .send({
+        model: 'sonnet',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Here is some useful information about the environment you are running in:\n<env>\n  Working directory: /Users/devangmstryls/desk/projects/pulse\n  Workspace root folder: /Users/devangmstryls/desk/projects/pulse\n  Is directory a git repo: yes\n</env>',
+          },
+          { role: 'user', content: 'hi' },
+        ],
+      });
+
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0].cwd).toBe('/Users/devangmstryls/desk/projects/pulse');
+  });
+
+  it('prefers an explicit body.cwd over one embedded in a system message', async () => {
+    const { app, provider } = buildApp();
+
+    await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .send({
+        model: 'sonnet',
+        cwd: '/explicit/override',
+        messages: [
+          { role: 'system', content: '<env>\n  Working directory: /from/system/message\n</env>' },
+          { role: 'user', content: 'hi' },
+        ],
+      });
+
+    expect(provider.calls[0].cwd).toBe('/explicit/override');
+  });
+
+  it('falls back to the configured WORKDIR when no cwd is available anywhere', async () => {
+    const { app, provider } = buildApp();
+
+    await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .send({ model: 'sonnet', messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(provider.calls[0].cwd).toBe(testConfig.workdir);
+  });
+});
+
+describe('extractWorkdirFromSystemMessage', () => {
+  it('extracts the path following "Working directory:" in a system message', () => {
+    const messages: ChatMessage[] = [
+      { role: 'system', content: '<env>\n  Working directory: /a/b/c\n  Platform: darwin\n</env>' },
+      { role: 'user', content: 'hi' },
+    ];
+    expect(extractWorkdirFromSystemMessage(messages)).toBe('/a/b/c');
+  });
+
+  it('returns undefined when there is no system message', () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'hi' }];
+    expect(extractWorkdirFromSystemMessage(messages)).toBeUndefined();
+  });
+
+  it('returns undefined when the system message has no working directory line', () => {
+    const messages: ChatMessage[] = [{ role: 'system', content: 'You are a helpful assistant.' }];
+    expect(extractWorkdirFromSystemMessage(messages)).toBeUndefined();
   });
 });
