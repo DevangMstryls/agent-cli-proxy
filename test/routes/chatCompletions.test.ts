@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../../src/app.js';
-import { extractWorkdirFromSystemMessage } from '../../src/routes/chatCompletions.js';
+import { extractWorkdirFromSystemMessage, flattenContent } from '../../src/routes/chatCompletions.js';
 import { SessionStore } from '../../src/session/SessionStore.js';
 import type { AppConfig } from '../../src/config.js';
 import type { AgentProvider, ChatMessage, ProviderEvent, StartTurnOptions } from '../../src/types.js';
@@ -108,15 +108,62 @@ describe('POST /v1/chat/completions', () => {
     expect(response.body.error.code).toBe('invalid_request_error');
   });
 
-  it('rejects requests where message content is not a string', async () => {
-    const { app } = buildApp();
+  it('accepts array-shaped content, flattening it to a prompt', async () => {
+    const { app, provider } = buildApp();
+
     const response = await request(app)
       .post('/v1/chat/completions')
       .set('Authorization', 'Bearer test-key')
       .send({ model: 'sonnet', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] });
 
+    expect(response.status).toBe(200);
+    expect(provider.calls[0].prompt).toBe('hi');
+  });
+
+  it('flattens the multi-part shape an @folder mention produces', async () => {
+    const { app, provider } = buildApp();
+
+    const response = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .send({
+        model: 'sonnet',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Set up @pulse-green-market/ on EKS.' },
+              { type: 'text', text: '<path>/repo/pulse-green-market/</path>\n<type>directory</type>' },
+              {
+                type: 'file',
+                mime: 'application/x-directory',
+                filename: 'pulse-green-market',
+                url: 'file:///repo/pulse-green-market/',
+              },
+            ],
+          },
+        ],
+      });
+
+    expect(response.status).toBe(200);
+    const prompt = provider.calls[0].prompt;
+    expect(prompt).toContain('Set up @pulse-green-market/ on EKS.');
+    expect(prompt).toContain('<path>/repo/pulse-green-market/</path>');
+    // The attachment survives as a path the agent can actually act on.
+    expect(prompt).toContain('[pulse-green-market] file:///repo/pulse-green-market/');
+  });
+
+  it('rejects content that is neither a string nor an array', async () => {
+    const { app, provider } = buildApp();
+
+    const response = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .send({ model: 'sonnet', messages: [{ role: 'user', content: 42 }] });
+
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe('invalid_request_error');
+    expect(provider.calls).toHaveLength(0);
   });
 
   it('serializes concurrent requests that resolve to the same resumed session', async () => {
@@ -384,5 +431,45 @@ describe('extractWorkdirFromSystemMessage', () => {
   it('returns undefined when the system message has no working directory line', () => {
     const messages: ChatMessage[] = [{ role: 'system', content: 'You are a helpful assistant.' }];
     expect(extractWorkdirFromSystemMessage(messages)).toBeUndefined();
+  });
+});
+
+describe('flattenContent', () => {
+  it('passes a plain string through untouched', () => {
+    expect(flattenContent('just text')).toBe('just text');
+  });
+
+  it('joins multiple text parts with blank lines', () => {
+    expect(flattenContent([{ type: 'text', text: 'one' }, { type: 'text', text: 'two' }])).toBe('one\n\ntwo');
+  });
+
+  it('renders a file part as a labelled path', () => {
+    expect(flattenContent([{ type: 'file', filename: 'repo', url: 'file:///x/repo/' }])).toBe(
+      '[repo] file:///x/repo/',
+    );
+  });
+
+  it('falls back to the bare url when a file part has no filename', () => {
+    expect(flattenContent([{ type: 'file', url: 'file:///x/y' }])).toBe('file:///x/y');
+  });
+
+  it('renders an OpenAI image_url part', () => {
+    expect(flattenContent([{ type: 'image_url', image_url: { url: 'https://x/y.png' } }])).toBe(
+      '[image] https://x/y.png',
+    );
+  });
+
+  it('skips parts it cannot render rather than failing the request', () => {
+    expect(flattenContent([{ type: 'text', text: 'kept' }, { type: 'mystery' }, null, 7])).toBe('kept');
+  });
+
+  it('returns an empty string for an array with nothing usable', () => {
+    expect(flattenContent([{ type: 'mystery' }])).toBe('');
+  });
+
+  it('returns undefined for a type that is neither string nor array', () => {
+    expect(flattenContent(42)).toBeUndefined();
+    expect(flattenContent(null)).toBeUndefined();
+    expect(flattenContent(undefined)).toBeUndefined();
   });
 });

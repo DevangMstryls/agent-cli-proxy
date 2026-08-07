@@ -89,6 +89,42 @@ export function resolveExplicitResume(
   return { sessionId, prompt };
 }
 
+// OpenAI's schema allows `content` to be either a plain string or an array of
+// typed parts, and real clients use both — opencode/OpenChamber sends an array
+// as soon as the message references a file or directory (an "@folder" mention).
+// Everything downstream builds a text prompt for the CLI, so parts are flattened
+// to text here. File and image parts become a readable reference rather than
+// being dropped: the agent has filesystem access, so a path it can act on is
+// more useful than silence about an attachment the user clearly intended.
+export function flattenContent(content: unknown): string | undefined {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return undefined;
+
+  const pieces: string[] = [];
+  for (const part of content) {
+    if (typeof part === 'string') {
+      pieces.push(part);
+      continue;
+    }
+    if (part === null || typeof part !== 'object') continue;
+
+    const p = part as Record<string, any>;
+    if (typeof p.text === 'string') {
+      pieces.push(p.text);
+    } else if (typeof p.url === 'string') {
+      pieces.push(p.filename ? `[${p.filename}] ${p.url}` : p.url);
+    } else if (typeof p.image_url?.url === 'string') {
+      pieces.push(`[image] ${p.image_url.url}`);
+    }
+  }
+
+  const flattened = pieces.filter((piece) => piece.trim()).join('\n\n');
+  // An array that yields nothing usable is still valid input shape-wise, so
+  // return an empty string rather than undefined — undefined means "wrong type"
+  // to the caller, and would produce a misleading error.
+  return flattened;
+}
+
 export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
   return async function handleChatCompletions(req: Request, res: Response) {
     try {
@@ -98,9 +134,17 @@ export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
         throw new ApiError('messages must be a non-empty array', 400, 'invalid_request_error');
       }
 
-      if (body.messages.some((m) => typeof m.content !== 'string')) {
-        throw new ApiError('messages[].content must be a string', 400, 'invalid_request_error');
-      }
+      const messages = body.messages.map((message) => {
+        const content = flattenContent(message?.content);
+        if (content === undefined) {
+          throw new ApiError(
+            'messages[].content must be a string or an array of content parts',
+            400,
+            'invalid_request_error',
+          );
+        }
+        return { ...message, content };
+      });
 
       // Any model string the client sends is forwarded as-is to `claude --model`
       // (an alias like "opus", or a specific pinned version like
@@ -113,13 +157,13 @@ export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
         throw new ApiError('model must match ^[A-Za-z0-9][A-Za-z0-9._@:[\\]-]*$', 400, 'invalid_request_error');
       }
 
-      const cwd = body.cwd ?? extractWorkdirFromSystemMessage(body.messages) ?? deps.config.workdir;
+      const cwd = body.cwd ?? extractWorkdirFromSystemMessage(messages) ?? deps.config.workdir;
       assertNotFlagLike(cwd, 'cwd');
 
-      const explicitResume = resolveExplicitResume(req.header('x-claude-session-id'), body.messages);
+      const explicitResume = resolveExplicitResume(req.header('x-claude-session-id'), messages);
       const resolution = explicitResume
         ? { prompt: explicitResume.prompt, resumeSessionId: explicitResume.sessionId }
-        : resolveConversation(body.messages, deps.sessionStore);
+        : resolveConversation(messages, deps.sessionStore);
 
       // Requests that resolve to the same underlying Claude session (either
       // resuming an existing one or minting a new one) must be serialized —
@@ -169,7 +213,7 @@ export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
             // assistant reply it just received, so that's what gets hashed
             // here — resolveConversation could not compute this key itself,
             // since the reply doesn't exist until the provider call completes.
-            const rememberKey = hashMessages([...body.messages, { role: 'assistant', content: fullReplyText }]);
+            const rememberKey = hashMessages([...messages, { role: 'assistant', content: fullReplyText }]);
             deps.sessionStore.remember(rememberKey, capturedSessionId);
           }
         }

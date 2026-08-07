@@ -3,9 +3,17 @@ export interface ChatMessage {
   content: string;
 }
 
+// What arrives on the wire, before normalization. OpenAI allows `content` to be
+// a string or an array of typed parts, so it can't be typed as ChatMessage —
+// the route flattens each message to a ChatMessage before anything else runs.
+export interface IncomingChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: unknown;
+}
+
 export interface ChatCompletionRequest {
   model: string;
-  messages: ChatMessage[];
+  messages: IncomingChatMessage[];
   stream?: boolean;
   cwd?: string;
 }
