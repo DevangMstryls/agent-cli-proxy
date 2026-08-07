@@ -282,6 +282,89 @@ describe('POST /v1/chat/completions', () => {
     expect(response.body.error.code).toBe('invalid_request_error');
     expect(provider.calls).toHaveLength(0);
   });
+
+  it('resumes a session named via the X-Claude-Session-Id header', async () => {
+    const { app, provider } = buildApp();
+
+    await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .set('X-Claude-Session-Id', 'cli-session-42')
+      .send({ model: 'sonnet', messages: [{ role: 'user', content: 'what did we decide?' }] });
+
+    expect(provider.calls[0].resumeSessionId).toBe('cli-session-42');
+    expect(provider.calls[0].newSessionId).toBeUndefined();
+    expect(provider.calls[0].prompt).toBe('what did we decide?');
+  });
+
+  it('resumes a session named via a /resume directive and strips it from the prompt', async () => {
+    const { app, provider } = buildApp();
+
+    await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .send({ model: 'sonnet', messages: [{ role: 'user', content: '/resume cli-session-42 what did we decide?' }] });
+
+    expect(provider.calls[0].resumeSessionId).toBe('cli-session-42');
+    expect(provider.calls[0].prompt).toBe('what did we decide?');
+  });
+
+  it('sends "continue" when the /resume directive has no trailing text', async () => {
+    const { app, provider } = buildApp();
+
+    await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .send({ model: 'sonnet', messages: [{ role: 'user', content: '/resume cli-session-42' }] });
+
+    expect(provider.calls[0].resumeSessionId).toBe('cli-session-42');
+    expect(provider.calls[0].prompt).toBe('continue');
+  });
+
+  it('keeps later turns bound to the directive session, sending only the newest message', async () => {
+    const { app, provider } = buildApp();
+
+    await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .send({
+        model: 'sonnet',
+        messages: [
+          { role: 'user', content: '/resume cli-session-42 what did we decide?' },
+          { role: 'assistant', content: 'We decided X.' },
+          { role: 'user', content: 'and why?' },
+        ],
+      });
+
+    expect(provider.calls[0].resumeSessionId).toBe('cli-session-42');
+    expect(provider.calls[0].prompt).toBe('and why?');
+  });
+
+  it('rejects an explicit session id with an unsafe shape', async () => {
+    const { app, provider } = buildApp();
+
+    const response = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .set('X-Claude-Session-Id', '--resume-something')
+      .send({ model: 'sonnet', messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('invalid_request_error');
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it('prefers the header session id over a /resume directive', async () => {
+    const { app, provider } = buildApp();
+
+    await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .set('X-Claude-Session-Id', 'header-session')
+      .send({ model: 'sonnet', messages: [{ role: 'user', content: '/resume directive-session hi' }] });
+
+    expect(provider.calls[0].resumeSessionId).toBe('header-session');
+  });
 });
 
 describe('extractWorkdirFromSystemMessage', () => {

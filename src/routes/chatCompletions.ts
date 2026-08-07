@@ -42,6 +42,53 @@ export function extractWorkdirFromSystemMessage(messages: ChatMessage[]): string
   return match ? match[1].trim() : undefined;
 }
 
+// A Claude session ID is a UUID; constrain the charset both to catch typos
+// early and to guarantee the value can never be reinterpreted as a CLI flag
+// when passed to `claude --resume <id>`.
+const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
+
+// First-message directive: "/resume <session-id>", optionally followed by the
+// actual message text. Lets a chat client with no custom-header support bind
+// a conversation to a pre-existing Claude CLI session.
+const RESUME_DIRECTIVE = /^\/resume\s+(\S+)\s*/;
+
+export interface ExplicitResume {
+  sessionId: string;
+  prompt: string;
+}
+
+// An explicit session ID (X-Claude-Session-Id header, or a "/resume <id>"
+// directive at the start of the conversation's first user message) bypasses
+// hash-based conversation matching entirely: the turn always resumes that
+// session, sending only the newest message. The directive is resolved from
+// the FIRST user message on every turn — clients resend full history each
+// call, so this keeps later turns bound to the same session even if the
+// proxy restarted and lost its in-memory session store.
+export function resolveExplicitResume(
+  headerSessionId: string | undefined,
+  messages: ChatMessage[],
+): ExplicitResume | undefined {
+  const firstUserMessage = messages.find((m) => m.role === 'user');
+  const directiveMatch = firstUserMessage?.content.match(RESUME_DIRECTIVE);
+  const sessionId = headerSessionId?.trim() || directiveMatch?.[1];
+  if (!sessionId) return undefined;
+
+  if (!SESSION_ID_PATTERN.test(sessionId)) {
+    throw new ApiError('session id must match ^[A-Za-z0-9][A-Za-z0-9-]*$', 400, 'invalid_request_error');
+  }
+
+  const lastMessage = messages[messages.length - 1];
+  let prompt = lastMessage.content;
+  if (lastMessage === firstUserMessage && directiveMatch) {
+    // Turn 1 of a directive-initiated chat: strip the directive from the
+    // prompt actually sent to Claude. A bare "/resume <id>" with no
+    // further text becomes a simple "continue".
+    prompt = lastMessage.content.slice(directiveMatch[0].length).trim() || 'continue';
+  }
+
+  return { sessionId, prompt };
+}
+
 export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
   return async function handleChatCompletions(req: Request, res: Response) {
     try {
@@ -68,7 +115,11 @@ export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
 
       const cwd = body.cwd ?? extractWorkdirFromSystemMessage(body.messages) ?? deps.config.workdir;
       assertNotFlagLike(cwd, 'cwd');
-      const resolution = resolveConversation(body.messages, deps.sessionStore);
+
+      const explicitResume = resolveExplicitResume(req.header('x-claude-session-id'), body.messages);
+      const resolution = explicitResume
+        ? { prompt: explicitResume.prompt, resumeSessionId: explicitResume.sessionId }
+        : resolveConversation(body.messages, deps.sessionStore);
 
       // Requests that resolve to the same underlying Claude session (either
       // resuming an existing one or minting a new one) must be serialized —

@@ -118,6 +118,29 @@ with:
 | `SESSION_TTL_MS`    | `86400000`     | How long an idle conversation can be resumed (24h default)       |
 | `MAX_SESSIONS`      | `500`          | Max concurrent tracked conversations (LRU-evicted beyond this)   |
 
+## Resuming an existing Claude Code CLI session
+
+Conversations normally get their own fresh Claude sessions, but you can bind
+a chat to a session you previously started in the `claude` CLI (find its ID
+via the `claude --resume` picker, or the `.jsonl` filenames under
+`~/.claude/projects/<encoded-dir>/`). Two ways:
+
+- **First-message directive** (per-chat, works in any client): start the
+  conversation with `/resume <session-id>`, optionally followed by your
+  actual message — e.g. `/resume c830421d-… what did we decide about auth?`
+  The directive is stripped before the message reaches Claude; a bare
+  `/resume <id>` with no text sends "continue". Later turns in the same chat
+  stay bound to that session automatically.
+- **`X-Claude-Session-Id` header** (per-provider, for clients that support
+  custom headers — OpenChamber's provider config has a Headers section):
+  every request through that provider resumes the given session. The header
+  wins if both are present.
+
+**Caveat:** Claude stores sessions per working directory, so the resumed
+request must run with the same directory the original CLI session was
+started in — make sure `WORKDIR`, the request's `cwd` field, or your
+client's own working directory matches it.
+
 ## How conversation continuity works
 
 OpenAI's chat completions protocol resends the full message history on every
