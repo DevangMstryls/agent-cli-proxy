@@ -7,7 +7,6 @@ import { resolveConversation, tapProviderEvents } from '../session/resolveConver
 import type { SessionStore } from '../session/SessionStore.js';
 import { formatSseChunk, SSE_DONE, toOpenAiChunks, toOpenAiCompletion } from '../translate/openaiSse.js';
 import type { AgentProvider, ChatCompletionRequest, ChatMessage } from '../types.js';
-import { MODEL_ALIASES } from './models.js';
 
 export interface ChatCompletionsDeps {
   provider: AgentProvider;
@@ -41,7 +40,13 @@ export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
         throw new ApiError('messages[].content must be a string', 400, 'invalid_request_error');
       }
 
-      const model = MODEL_ALIASES.includes(body.model) ? body.model : deps.config.defaultModel;
+      // Any model string the client sends is forwarded as-is to `claude --model`
+      // (an alias like "opus", or a specific pinned version like
+      // "claude-opus-4-8") — we don't maintain our own allowlist of valid
+      // models, since Claude's own CLI already rejects genuinely invalid
+      // ones (surfaced as a clean 502 via ClaudeCliError, not silently
+      // swapped for the default).
+      const model = typeof body.model === 'string' && body.model.trim() ? body.model : deps.config.defaultModel;
       const cwd = body.cwd ?? extractWorkdirFromSystemMessage(body.messages) ?? deps.config.workdir;
       const resolution = resolveConversation(body.messages, deps.sessionStore);
 

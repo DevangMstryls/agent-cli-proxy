@@ -222,6 +222,28 @@ describe('POST /v1/chat/completions', () => {
 
     expect(provider.calls[0].cwd).toBe(testConfig.workdir);
   });
+
+  it('forwards any model string as-is, including a pinned version not in the alias list', async () => {
+    const { app, provider } = buildApp();
+
+    await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .send({ model: 'claude-opus-4-8', messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(provider.calls[0].model).toBe('claude-opus-4-8');
+  });
+
+  it('falls back to the configured DEFAULT_MODEL when model is missing or empty', async () => {
+    const { app, provider } = buildApp();
+
+    await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .send({ model: '', messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(provider.calls[0].model).toBe(testConfig.defaultModel);
+  });
 });
 
 describe('extractWorkdirFromSystemMessage', () => {
