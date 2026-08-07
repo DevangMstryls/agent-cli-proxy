@@ -141,6 +141,44 @@ request must run with the same directory the original CLI session was
 started in — make sure `WORKDIR`, the request's `cwd` field, or your
 client's own working directory matches it.
 
+## Finding resumable sessions (MCP server)
+
+To avoid hunting through `~/.claude/projects/` for session IDs, this repo ships
+a small MCP server exposing one read-only tool, `list_resumable_sessions`. Give
+it a working directory and it returns the sessions you can resume from there —
+newest first, each with its ID, when it was last active, and the first thing you
+actually typed, so you can tell them apart.
+
+```bash
+npm run build
+```
+
+Then register it with your MCP client. For Claude Code:
+
+```bash
+claude mcp add claude-sessions -- node /absolute/path/to/agent-cli-proxy/dist/mcp/server.js
+```
+
+Or add it directly to an MCP config file:
+
+```json
+{
+  "mcpServers": {
+    "claude-sessions": {
+      "command": "node",
+      "args": ["/absolute/path/to/agent-cli-proxy/dist/mcp/server.js"]
+    }
+  }
+}
+```
+
+The tool takes `cwd` (required, absolute) and `limit` (optional, default 20).
+Feed a returned session ID back through either resume mechanism above.
+
+Two things worth knowing: it reads Claude's session files directly and never
+writes to them, and a session only appears for the directory it was started in
+(the same per-directory rule that governs resuming).
+
 ## How conversation continuity works
 
 OpenAI's chat completions protocol resends the full message history on every
