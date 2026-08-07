@@ -58,6 +58,44 @@ API_KEY=<value from your .env> ./scripts/smoke-test.sh
 This checks `/healthz`, `/v1/models`, a non-streaming chat completion, and a
 streaming chat completion, in order.
 
+## Running as a daemon
+
+For long-lived use (rather than running `npm start` in a terminal you have to
+keep open), this proxy can run under [pm2](https://pm2.keymetrics.io/) as a
+managed background process that restarts automatically if it crashes, on
+macOS, Linux, and Windows.
+
+```bash
+npm install -g pm2
+npm run build
+npm run daemon:start
+```
+
+Day-to-day management:
+
+```bash
+npm run daemon:status   # is it running?
+npm run daemon:logs     # tail its stdout/stderr
+npm run daemon:restart  # restart it (e.g. after changing .env or rebuilding)
+npm run daemon:stop     # stop it, keep it registered with pm2
+npm run daemon:delete   # remove it from pm2 entirely
+```
+
+### Auto-starting at login/boot
+
+By default pm2 (and the process it's managing) stops when you log out or
+reboot. To have it come back automatically, run one of these **yourself** —
+they need elevated privileges, so nothing here runs them for you:
+
+- **macOS / Linux:** `pm2 startup` prints a `sudo`-prefixed command tailored
+  to your system; copy and run that command once, then run `pm2 save` to
+  persist the current process list (including `agent-cli-proxy`) so pm2
+  restores it on the next boot.
+- **Windows:** pm2 has no built-in boot-startup support on Windows. Install
+  [`pm2-installer`](https://github.com/jessety/pm2-installer) from an
+  elevated ("Run as Administrator") terminal, following its README, then run
+  `pm2 save` as above.
+
 ## Pointing Hermes / OpenChamber at it
 
 Configure the tool's "custom OpenAI-compatible provider" (or equivalent)

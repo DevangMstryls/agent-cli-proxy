@@ -7,7 +7,13 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "daemon:start": "pm2 start ecosystem.config.cjs",
+    "daemon:stop": "pm2 stop agent-cli-proxy",
+    "daemon:restart": "pm2 restart agent-cli-proxy",
+    "daemon:status": "pm2 status agent-cli-proxy",
+    "daemon:logs": "pm2 logs agent-cli-proxy",
+    "daemon:delete": "pm2 delete agent-cli-proxy"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
