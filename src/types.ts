@@ -25,6 +25,13 @@ export interface ProviderUsage {
 
 export type ProviderEvent =
   | { type: 'delta'; text: string }
+  // Claude's own tool activity, surfaced so a chat client can show what the
+  // agent is doing. These are never translated into OpenAI `tool_calls`: the
+  // CLI already executed them, and a client that saw tool_calls would try to
+  // run them a second time.
+  | { type: 'tool_use'; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; isError: boolean; text: string }
+  | { type: 'thinking'; text: string }
   | { type: 'result'; sessionId?: string; stopReason: string; usage: ProviderUsage }
   | { type: 'error'; message: string };
 

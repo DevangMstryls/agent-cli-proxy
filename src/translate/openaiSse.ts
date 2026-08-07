@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ProviderEvent } from '../types.js';
+import { ActivityRenderer } from './renderActivity.js';
 
 export interface OpenAiChunk {
   id: string;
@@ -48,10 +49,13 @@ export async function* toOpenAiChunks(
 ): AsyncGenerator<OpenAiChunk> {
   const id = `chatcmpl-${randomUUID()}`;
   const created = Math.floor(now() / 1000);
+  const renderer = new ActivityRenderer();
   let sentRole = false;
 
   for await (const event of events) {
-    if (event.type === 'delta') {
+    if (event.type === 'delta' || event.type === 'tool_use' || event.type === 'tool_result' || event.type === 'thinking') {
+      const text = renderer.render(event);
+      if (!text) continue;
       yield {
         id,
         object: 'chat.completion.chunk',
@@ -60,7 +64,7 @@ export async function* toOpenAiChunks(
         choices: [
           {
             index: 0,
-            delta: sentRole ? { content: event.text } : { role: 'assistant', content: event.text },
+            delta: sentRole ? { content: text } : { role: 'assistant', content: text },
             finish_reason: null,
           },
         ],
@@ -88,13 +92,14 @@ export async function toOpenAiCompletion(
 ): Promise<OpenAiCompletion> {
   const id = `chatcmpl-${randomUUID()}`;
   const created = Math.floor(now() / 1000);
+  const renderer = new ActivityRenderer();
   let content = '';
   let finishReason = 'stop';
   let usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
   for await (const event of events) {
-    if (event.type === 'delta') {
-      content += event.text;
+    if (event.type === 'delta' || event.type === 'tool_use' || event.type === 'tool_result' || event.type === 'thinking') {
+      content += renderer.render(event);
     } else if (event.type === 'result') {
       finishReason = finishReasonFromEvent(event);
       usage = usageFromEvent(event);

@@ -6,6 +6,7 @@ import { hashMessages } from '../session/hash.js';
 import { resolveConversation, tapProviderEvents } from '../session/resolveConversation.js';
 import type { SessionStore } from '../session/SessionStore.js';
 import { formatSseChunk, SSE_DONE, toOpenAiChunks, toOpenAiCompletion } from '../translate/openaiSse.js';
+import { ActivityRenderer } from '../translate/renderActivity.js';
 import type { AgentProvider, ChatCompletionRequest, ChatMessage } from '../types.js';
 
 export interface ChatCompletionsDeps {
@@ -184,11 +185,19 @@ export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
           mcpConfig: deps.config.mcpConfig,
           allowedTools: deps.config.allowedTools,
         });
+        // The remember key has to hash the reply exactly as the client received
+        // it — the client echoes that text back on the next turn, and the hash
+        // must match or the session silently fails to resume. Since the reply
+        // now includes rendered tool/thinking activity, reproduce it with a
+        // renderer of its own rather than summing raw deltas. ActivityRenderer
+        // is deterministic, so an identical event sequence yields identical
+        // text to what the translator emitted.
+        const replyRenderer = new ActivityRenderer();
         const events = tapProviderEvents(rawEvents, (event) => {
-          if (event.type === 'delta') {
-            fullReplyText += event.text;
-          } else if (event.type === 'result' && event.sessionId) {
+          if (event.type === 'result' && event.sessionId) {
             capturedSessionId = event.sessionId;
+          } else {
+            fullReplyText += replyRenderer.render(event);
           }
         });
 
