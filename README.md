@@ -117,6 +117,9 @@ with:
 | `PERMISSION_MODE`   | `acceptEdits`  | Claude CLI `--permission-mode`                                   |
 | `SESSION_TTL_MS`    | `86400000`     | How long an idle conversation can be resumed (24h default)       |
 | `MAX_SESSIONS`      | `500`          | Max concurrent tracked conversations (LRU-evicted beyond this)   |
+| `MCP_CONFIG`        | *(unset)*      | Path to an MCP config JSON. Setting it turns `--safe-mode` off   |
+| `ALLOWED_TOOLS`     | *(unset)*      | Comma-separated tools auto-approved without a permission prompt  |
+| `SAFE_MODE`         | `true`         | Pass `--safe-mode`. Forced off by `MCP_CONFIG`; both is an error |
 
 ## Resuming an existing Claude Code CLI session
 
@@ -178,6 +181,48 @@ Feed a returned session ID back through either resume mechanism above.
 Two things worth knowing: it reads Claude's session files directly and never
 writes to them, and a session only appears for the directory it was started in
 (the same per-directory rule that governs resuming).
+
+### Using MCP servers through the proxy
+
+Registering an MCP server with your chat client (OpenChamber, etc.) does **not**
+make it reachable through this proxy — the proxy doesn't accept or return
+OpenAI-format `tools`/`tool_calls`, because tool execution happens inside the
+Claude CLI rather than being handed back to the client. To give proxied sessions
+MCP access, point the proxy itself at an MCP config:
+
+```
+MCP_CONFIG=/absolute/path/to/mcp.json
+ALLOWED_TOOLS=mcp__claude-sessions__list_resumable_sessions
+```
+
+where `mcp.json` is the standard MCP shape:
+
+```json
+{
+  "mcpServers": {
+    "claude-sessions": {
+      "command": "node",
+      "args": ["/absolute/path/to/agent-cli-proxy/dist/mcp/server.js"]
+    }
+  }
+}
+```
+
+Two constraints make both variables necessary:
+
+1. **`MCP_CONFIG` turns off `--safe-mode`.** Safe mode disables MCP servers and
+   overrides an explicit `--mcp-config`, so the two can't coexist — setting
+   `MCP_CONFIG` switches safe mode off automatically, and setting both it and
+   `SAFE_MODE=true` is rejected at startup rather than silently ignored. The
+   cost is that sessions once again load your CLAUDE.md, hooks, plugins, and
+   skills, which safe mode existed to strip.
+2. **`ALLOWED_TOOLS` is required for the tool to actually run.** MCP calls
+   aren't covered by `acceptEdits`, and a non-interactive session has nobody to
+   answer a permission prompt — so without an allowlist the model sees the tool
+   and is refused when it calls it. Name each MCP tool as
+   `mcp__<server>__<tool>` (comma-separated for several). Setting
+   `PERMISSION_MODE=bypassPermissions` also works but auto-approves everything
+   including Bash, so prefer the allowlist.
 
 ## How conversation continuity works
 

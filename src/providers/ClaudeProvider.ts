@@ -37,11 +37,22 @@ export class ClaudeProvider implements AgentProvider {
       '--output-format', 'stream-json',
       '--verbose',
       '--include-partial-messages',
-      '--safe-mode',
       '--permission-mode', options.permissionMode,
       '--model', options.model,
       '--add-dir', options.cwd,
     ];
+    // Mutually exclusive by necessity: --safe-mode disables MCP servers and
+    // overrides an explicit --mcp-config, so a session can have one or the
+    // other. loadConfig() rejects a configuration that asks for both.
+    if (options.safeMode) {
+      args.push('--safe-mode');
+    }
+    if (options.mcpConfig) {
+      args.push('--mcp-config', options.mcpConfig, '--strict-mcp-config');
+    }
+    if (options.allowedTools) {
+      args.push('--allowedTools', options.allowedTools);
+    }
     if (options.resumeSessionId) {
       args.push('--resume', options.resumeSessionId);
     } else if (options.newSessionId) {

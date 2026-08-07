@@ -136,6 +136,9 @@ export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
           newSessionId: resolution.newSessionId,
           cwd,
           permissionMode: deps.config.permissionMode,
+          safeMode: deps.config.safeMode,
+          mcpConfig: deps.config.mcpConfig,
+          allowedTools: deps.config.allowedTools,
         });
         const events = tapProviderEvents(rawEvents, (event) => {
           if (event.type === 'delta') {

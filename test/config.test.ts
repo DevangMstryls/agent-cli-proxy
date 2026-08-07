@@ -17,6 +17,36 @@ describe('loadConfig', () => {
     expect(config.maxSessions).toBe(500);
   });
 
+  it('defaults to safe mode with no MCP config', () => {
+    const config = loadConfig({ API_KEY: 'abc123' });
+    expect(config.safeMode).toBe(true);
+    expect(config.mcpConfig).toBeUndefined();
+  });
+
+  it('turns safe mode off automatically when an MCP config is set', () => {
+    const config = loadConfig({ API_KEY: 'abc123', MCP_CONFIG: '/etc/mcp.json' });
+    expect(config.mcpConfig).toBe('/etc/mcp.json');
+    expect(config.safeMode).toBe(false);
+  });
+
+  it('rejects a config that asks for both MCP and safe mode', () => {
+    expect(() => loadConfig({ API_KEY: 'abc123', MCP_CONFIG: '/etc/mcp.json', SAFE_MODE: 'true' })).toThrow(
+      /disables MCP servers/,
+    );
+  });
+
+  it('honours an explicit SAFE_MODE=false without an MCP config', () => {
+    const config = loadConfig({ API_KEY: 'abc123', SAFE_MODE: 'false' });
+    expect(config.safeMode).toBe(false);
+    expect(config.mcpConfig).toBeUndefined();
+  });
+
+  it('treats a blank MCP_CONFIG as unset', () => {
+    const config = loadConfig({ API_KEY: 'abc123', MCP_CONFIG: '   ' });
+    expect(config.mcpConfig).toBeUndefined();
+    expect(config.safeMode).toBe(true);
+  });
+
   it('reads overrides from env', () => {
     const config = loadConfig({ API_KEY: 'abc123', PORT: '9999', DEFAULT_MODEL: 'opus' });
     expect(config.port).toBe(9999);

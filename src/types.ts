@@ -27,6 +27,9 @@ export interface StartTurnOptions {
   newSessionId?: string;
   cwd: string;
   permissionMode: string;
+  safeMode?: boolean;
+  mcpConfig?: string;
+  allowedTools?: string;
 }
 
 export interface AgentProvider {

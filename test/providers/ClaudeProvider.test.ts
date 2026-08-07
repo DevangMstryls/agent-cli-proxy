@@ -45,6 +45,7 @@ const baseOptions: StartTurnOptions = {
   model: 'sonnet',
   cwd: '/tmp/workdir',
   permissionMode: 'acceptEdits',
+  safeMode: true,
 };
 
 describe('ClaudeProvider.buildArgs', () => {
@@ -56,10 +57,10 @@ describe('ClaudeProvider.buildArgs', () => {
       '--output-format', 'stream-json',
       '--verbose',
       '--include-partial-messages',
-      '--safe-mode',
       '--permission-mode', 'acceptEdits',
       '--model', 'sonnet',
       '--add-dir', '/tmp/workdir',
+      '--safe-mode',
       '--session-id', 'new-id',
     ]);
   });
@@ -72,6 +73,53 @@ describe('ClaudeProvider.buildArgs', () => {
     expect(args).toContain('--verbose');
     expect(args).not.toContain('--session-id');
     expect(args).not.toContain('hello');
+  });
+
+  it('omits --safe-mode when safe mode is off', () => {
+    const provider = new ClaudeProvider('claude');
+    const args = provider.buildArgs({ ...baseOptions, safeMode: false, newSessionId: 'new-id' });
+    expect(args).not.toContain('--safe-mode');
+  });
+
+  it('passes an MCP config through, scoped with --strict-mcp-config', () => {
+    const provider = new ClaudeProvider('claude');
+    const args = provider.buildArgs({
+      ...baseOptions,
+      safeMode: false,
+      mcpConfig: '/etc/mcp.json',
+      newSessionId: 'new-id',
+    });
+
+    expect(args).toContain('--mcp-config');
+    expect(args[args.indexOf('--mcp-config') + 1]).toBe('/etc/mcp.json');
+    expect(args).toContain('--strict-mcp-config');
+    // --safe-mode would disable the MCP servers we just asked for.
+    expect(args).not.toContain('--safe-mode');
+  });
+
+  it('passes an allowed-tools list through', () => {
+    const provider = new ClaudeProvider('claude');
+    const args = provider.buildArgs({
+      ...baseOptions,
+      allowedTools: 'mcp__claude-sessions__list_resumable_sessions',
+      newSessionId: 'new-id',
+    });
+
+    expect(args).toContain('--allowedTools');
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__claude-sessions__list_resumable_sessions');
+  });
+
+  it('omits --allowedTools when none are set', () => {
+    const provider = new ClaudeProvider('claude');
+    const args = provider.buildArgs({ ...baseOptions, newSessionId: 'new-id' });
+    expect(args).not.toContain('--allowedTools');
+  });
+
+  it('omits MCP flags when no config is set', () => {
+    const provider = new ClaudeProvider('claude');
+    const args = provider.buildArgs({ ...baseOptions, newSessionId: 'new-id' });
+    expect(args).not.toContain('--mcp-config');
+    expect(args).not.toContain('--strict-mcp-config');
   });
 });
 
