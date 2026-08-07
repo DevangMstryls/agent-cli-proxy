@@ -14,6 +14,21 @@ export interface ChatCompletionsDeps {
   config: AppConfig;
 }
 
+// Both `model` and `cwd` end up as the value of a `--flag <value>` pair passed
+// to `claude` via execve (no shell involved, so no space/semicolon injection
+// risk) — but a value starting with "-" can still be reinterpreted by the
+// CLI's own arg parser as an unrelated flag rather than this option's value
+// (e.g. model: "--dangerously-skip-permissions"), which would be a real
+// argument-injection vector. Reject that shape outright rather than relying
+// on the downstream parser's leniency.
+const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._@:[\]-]*$/;
+
+function assertNotFlagLike(value: string, fieldName: string): void {
+  if (value.startsWith('-')) {
+    throw new ApiError(`${fieldName} must not start with "-"`, 400, 'invalid_request_error');
+  }
+}
+
 // Some OpenAI-compatible coding-agent clients (e.g. opencode/OpenChamber) don't
 // send a structured `cwd` field — they embed it as plain text in the system
 // prompt instead, inside an "<env>...Working directory: <path>...</env>"
@@ -47,7 +62,12 @@ export function createChatCompletionsHandler(deps: ChatCompletionsDeps) {
       // ones (surfaced as a clean 502 via ClaudeCliError, not silently
       // swapped for the default).
       const model = typeof body.model === 'string' && body.model.trim() ? body.model : deps.config.defaultModel;
+      if (!MODEL_PATTERN.test(model)) {
+        throw new ApiError('model must match ^[A-Za-z0-9][A-Za-z0-9._@:[\\]-]*$', 400, 'invalid_request_error');
+      }
+
       const cwd = body.cwd ?? extractWorkdirFromSystemMessage(body.messages) ?? deps.config.workdir;
+      assertNotFlagLike(cwd, 'cwd');
       const resolution = resolveConversation(body.messages, deps.sessionStore);
 
       // Requests that resolve to the same underlying Claude session (either

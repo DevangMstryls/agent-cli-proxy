@@ -244,6 +244,44 @@ describe('POST /v1/chat/completions', () => {
 
     expect(provider.calls[0].model).toBe(testConfig.defaultModel);
   });
+
+  it('rejects a model value that looks like a CLI flag', async () => {
+    const { app, provider } = buildApp();
+
+    const response = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .send({ model: '--dangerously-skip-permissions', messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('invalid_request_error');
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it('rejects a model value containing characters outside the allowed set', async () => {
+    const { app } = buildApp();
+
+    const response = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .send({ model: 'sonnet; rm -rf /', messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('invalid_request_error');
+  });
+
+  it('rejects a cwd value that looks like a CLI flag', async () => {
+    const { app, provider } = buildApp();
+
+    const response = await request(app)
+      .post('/v1/chat/completions')
+      .set('Authorization', 'Bearer test-key')
+      .send({ model: 'sonnet', cwd: '--dangerously-skip-permissions', messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('invalid_request_error');
+    expect(provider.calls).toHaveLength(0);
+  });
 });
 
 describe('extractWorkdirFromSystemMessage', () => {
